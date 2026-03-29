@@ -11,4 +11,4 @@ gh pr create --repo heavygee/ralph-wiggum-cursor --base main --head fix/no-op-lo
 - [ ] If needed, verify branch and remote:
   - `git -C /home/heavygee/coding/ralph-wiggum-cursor status`
   - `git -C /home/heavygee/coding/ralph-wiggum-cursor remote -v`
-- [ ] Commit head on fork: `bcb1ee5`.
+- [ ] Commit head on fork: `7ac497a`.
