@@ -628,10 +628,22 @@ run_ralph_loop() {
   local done_after=0
   local total_after=0
 
-  # Validate model before starting loop
+  # Validate and repair model selection before starting loop
   if ! validate_model "$MODEL" "$workspace"; then
-    echo "❌ Model validation failed."
-    return 1
+    if command -v cursor-agent >/dev/null 2>&1; then
+      local fallback_model
+      fallback_model="$(cursor-agent --list-models 2>/dev/null | awk 'NR==1 {print $1; exit}')"
+      if [[ -n "$fallback_model" ]]; then
+        echo "⚠️  Invalid model '$MODEL'. Falling back to available model: $fallback_model"
+        MODEL="$fallback_model"
+      else
+        echo "❌ Model validation failed and no fallback model could be detected."
+        return 1
+      fi
+    else
+      echo "❌ Model validation failed."
+      return 1
+    fi
   fi
   
   # Commit any uncommitted work first
