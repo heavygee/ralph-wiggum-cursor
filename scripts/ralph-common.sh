@@ -319,6 +319,39 @@ _count_criteria_direct() {
   echo "$done_count:$total"
 }
 
+# Validate the configured model string when cursor-agent supports model discovery.
+# Returns 0 when model appears valid, 1 when definitively invalid.
+validate_model() {
+  local model="$1"
+  local model_list
+
+  if [[ -z "$model" ]]; then
+    return 1
+  fi
+
+  if ! command -v cursor-agent >/dev/null 2>&1; then
+    # If cursor-agent is not found, assume model is valid to proceed with execution,
+    # as it might be using a different runner or pre-configured model.
+    return 0
+  fi
+
+  if ! model_list=$(cursor-agent --list-models 2>/dev/null); then
+    # If model listing fails, allow execution rather than hard-stop,
+    # as it might be a temporary API issue or an older cursor-agent version.
+    return 0
+  fi
+
+  # Check if the model is in the list. This handles cases where the model
+  # is an exact match, or part of a longer model string.
+  if printf '%s\n' "$model_list" | grep -Fqx "$model" || \
+     printf '%s\n' "$model_list" | grep -Fq " $model " || \
+     printf '%s\n' "$model_list" | grep -Fq "$model"; then
+    return 0
+  fi
+
+  return 1
+}
+
 # =============================================================================
 # TASK PARSER CONVENIENCE WRAPPERS
 # =============================================================================
@@ -589,6 +622,17 @@ run_iteration() {
 run_ralph_loop() {
   local workspace="$1"
   local script_dir="${2:-$(dirname "${BASH_SOURCE[0]}")}"
+  local no_progress_count=0
+  local done_before=0
+  local total_before=0
+  local done_after=0
+  local total_after=0
+
+  # Validate model before starting loop
+  if ! validate_model "$MODEL" "$workspace"; then
+    echo "❌ Model validation failed."
+    return 1
+  fi
   
   # Commit any uncommitted work first
   cd "$workspace"
@@ -613,6 +657,9 @@ run_ralph_loop() {
   local session_id=""
   
   while [[ $iteration -le $MAX_ITERATIONS ]]; do
+    # Capture checklist state before iteration
+    IFS=":" read -r done_before total_before < <(count_criteria "$workspace")
+
     # Run iteration
     local signal
     signal=$(run_iteration "$workspace" "$iteration" "$session_id" "$script_dir")
@@ -722,8 +769,28 @@ run_ralph_loop() {
       *)
         # Agent finished naturally, check if more work needed
         if [[ "$task_status" == INCOMPLETE:* ]]; then
+          IFS=":" read -r done_after total_after < <(count_criteria "$workspace")
           local remaining_count=${task_status#INCOMPLETE:}
-          log_progress "$workspace" "**Session $iteration ended** - Agent finished naturally ($remaining_count criteria remaining)"
+          local no_progress_delta=$((done_after - done_before))
+
+          if [[ $no_progress_delta -lt 0 ]]; then
+            no_progress_delta=0
+          fi
+
+          if [[ $no_progress_delta -eq 0 && $total_after -eq $total_before ]]; then
+            no_progress_count=$((no_progress_count + 1))
+            log_progress "$workspace" "**Session $iteration ended** - No productive change detected ($remaining_count criteria remaining, streak $no_progress_count)"
+            echo ""
+            echo "⚠️  Agent finished naturally with no measurable checklist progress."
+            if [[ $no_progress_count -ge 3 ]]; then
+              echo "🚨 No-progress streak reached. Treating as failure signal."
+              return 1
+            fi
+          else
+            no_progress_count=0
+            log_progress "$workspace" "**Session $iteration ended** - Agent finished naturally ($remaining_count criteria remaining)"
+          fi
+
           echo ""
           echo "📋 Agent finished but $remaining_count criteria remaining."
           echo "   Starting next iteration..."
