@@ -324,6 +324,7 @@ _count_criteria_direct() {
 validate_model() {
   local model="$1"
   local model_list
+  local cleaned_models
 
   if [[ -z "$model" ]]; then
     return 1
@@ -341,11 +342,13 @@ validate_model() {
     return 0
   fi
 
+  cleaned_models=$(printf '%s\n' "$model_list" | sed -E $'s/\x1B\\[[0-9;]*[JKmsuABCDHSfhm]//g')
+
   # Check if the model is in the list. This handles cases where the model
   # is an exact match, or part of a longer model string.
-  if printf '%s\n' "$model_list" | grep -Fqx "$model" || \
-     printf '%s\n' "$model_list" | grep -Fq " $model " || \
-     printf '%s\n' "$model_list" | grep -Fq "$model"; then
+  if printf '%s\n' "$cleaned_models" | grep -Fqx "$model" || \
+     printf '%s\n' "$cleaned_models" | grep -Fq " $model " || \
+     printf '%s\n' "$cleaned_models" | grep -Fq "$model"; then
     return 0
   fi
 
@@ -631,9 +634,19 @@ run_ralph_loop() {
   # Validate and repair model selection before starting loop
   if ! validate_model "$MODEL" "$workspace"; then
     if command -v cursor-agent >/dev/null 2>&1; then
+      local model_list
+      local cleaned_models
+      local fallback_current
       local fallback_model
-      fallback_model="$(cursor-agent --list-models 2>/dev/null | awk 'NR==1 {print $1; exit}')"
+      if model_list="$(cursor-agent --list-models 2>/dev/null)"; then
+        cleaned_models="$(printf '%s\n' "$model_list" | sed -E $'s/\x1B\\[[0-9;]*[JKmsuABCDHSfhm]//g')"
+        fallback_current="$(printf '%s\n' "$cleaned_models" | awk '/\(current\)/ {for(i=1;i<=NF;i++) if($i ~ /^[a-zA-Z0-9._-]+$/){print $i; exit}}')"
+        fallback_model="$(printf '%s\n' "$cleaned_models" | awk '/^[[:space:]]*[a-zA-Z0-9._-]+[[:space:]]+-/ {print $1; exit}')"
+      else
+        fallback_model=""
+      fi
       if [[ -n "$fallback_model" ]]; then
+        [[ -n "$fallback_current" ]] && fallback_model="$fallback_current"
         echo "⚠️  Invalid model '$MODEL'. Falling back to available model: $fallback_model"
         MODEL="$fallback_model"
       else
